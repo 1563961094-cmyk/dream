@@ -54,8 +54,8 @@
     errBox.textContent = msg;
   }
 
-  fetch("shaders/dream.frag")
-    .then(r => { if (!r.ok) throw new Error("shaders/dream.frag 加载失败: HTTP " + r.status + "\n请通过 http 服务访问本目录(如 python3 -m http.server),不要直接双击打开。"); return r.text(); })
+  fetch("dream.frag")
+    .then(r => { if (!r.ok) throw new Error("dream.frag 加载失败: HTTP " + r.status + "\n请通过 http 服务访问本目录(如 python3 -m http.server),不要直接双击打开。"); return r.text(); })
     .then(src => init(src))
     .catch(e => showErr(String(e.message || e)));
 
