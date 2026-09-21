@@ -3,27 +3,52 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>亢奋的梦境 v2 — Fractal Land 艺术改编(多文件版)</title>
+<title>亢奋的梦境 v2 — 头部交互版(多文件版)</title>
 <!--
   亢奋的梦境 v2 · 多文件版入口。
   基于 Shadertoy XsBXWt("Fractal Cartoon" by Kali,MIT License;Nyan 部分来自 mu6k)。
-  运行器在 main.js,shader 在 shaders/dream.frag(运行时 fetch 加载,需要 http 服务);
-  shaders/original_pass0.glsl 与 original_pass1.glsl 是从 Shadertoy 提取的原版 pass 源码(存档用)。
+  运行器在 main.js,shader 在 dream.frag(运行时 fetch 加载,需要 http 服务 / GitHub Pages);
+  功能与单文件版 index-dream-v2.html 一致:26 参数滑块 + 梦境场景 + MediaPipe 头部交互。
   想要"双击即用"的版本,请打开同目录的 index-dream-v2.html(单文件自包含版)。
 -->
 <style>
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
   #c { width: 100vw; height: 100vh; display: block; cursor: crosshair; }
+  /* 粒子特效层:覆盖在 WebGL 画布上,不拦截鼠标 */
+  #fx { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 3; }
   #hud {
     position: fixed; left: 10px; top: 10px; color: #fff; font: 12px/1.6 monospace;
-    text-shadow: 0 1px 2px #000; user-select: none; pointer-events: none; opacity: .7;
+    text-shadow: 0 1px 2px #000; user-select: none; pointer-events: none; opacity: .7; z-index: 4;
   }
+  /* 头部交互提示文字 */
+  #hint {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5;
+    color: #ffd9ff; font: 13px/1.4 monospace; white-space: nowrap;
+    background: rgba(12, 2, 26, .55); backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 120, 255, .3); border-radius: 20px; padding: 7px 18px;
+    text-shadow: 0 1px 2px #000; user-select: none; pointer-events: none;
+  }
+  /* 场景切换时的名字提示(淡出) */
+  #sceneTip {
+    position: fixed; top: 54px; left: 50%; transform: translateX(-50%); z-index: 5;
+    color: #fff; font: bold 18px/1.4 monospace; letter-spacing: 2px; white-space: nowrap;
+    text-shadow: 0 0 12px #ff6bf7, 0 1px 3px #000; user-select: none; pointer-events: none;
+    opacity: 0; transition: opacity .5s;
+  }
+  /* 摄像头预览小窗(右上角,镜像显示) */
+  #camWrap {
+    position: fixed; right: 12px; top: 12px; width: 176px; z-index: 6;
+    border: 1px solid rgba(255, 120, 255, .4); border-radius: 10px; overflow: hidden;
+    background: rgba(0, 0, 0, .55); box-shadow: 0 0 14px rgba(255, 107, 247, .25);
+  }
+  #cam { width: 100%; display: block; transform: scaleX(-1); }
+  #camStatus { display: block; font: 10px/1.5 monospace; color: #ffd9ff; padding: 4px 7px; }
   #panel {
     position: fixed; right: 12px; bottom: 12px; width: 252px; max-height: calc(100vh - 24px);
     overflow-y: auto; box-sizing: border-box; padding: 10px 14px 12px;
     background: rgba(12, 2, 26, .62); backdrop-filter: blur(8px);
     border: 1px solid rgba(255, 120, 255, .25); border-radius: 12px;
-    color: #f2e6ff; font: 11px/1.5 monospace; user-select: none;
+    color: #f2e6ff; font: 11px/1.5 monospace; user-select: none; z-index: 6;
   }
   #panel h1 { font: bold 12px/1.4 monospace; margin: 2px 0 6px; color: #ff9df5; letter-spacing: 1px; }
   #panel .grp { margin-top: 8px; color: #9f8fd0; }
@@ -32,12 +57,18 @@
   #panel .row input[type=range] { flex: 1; accent-color: #ff6bf7; height: 14px; padding: 0; margin: 0; }
   #panel .row .val { flex: 0 0 38px; text-align: right; color: #ffd9ff; }
   #err { position: fixed; inset: 0; display: none; overflow: auto; padding: 24px;
-         background: #111; color: #f66; font: 13px/1.5 monospace; white-space: pre-wrap; }
+         background: #111; color: #f66; font: 13px/1.5 monospace; white-space: pre-wrap; z-index: 9; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<canvas id="fx"></canvas>
 <div id="hud"></div>
+<!-- 头部交互提示文字 -->
+<div id="hint">左右转头切换场景,点头触发粒子,摇头重置画面</div>
+<div id="sceneTip"></div>
+<!-- 摄像头预览小窗 -->
+<div id="camWrap"><video id="cam" autoplay muted playsinline></video><span id="camStatus">摄像头:请求权限中…</span></div>
 <div id="panel"><h1>亢奋的梦境 v2 · 参数</h1><div id="rows"></div></div>
 <pre id="err"></pre>
 <script src="main.js"></script>

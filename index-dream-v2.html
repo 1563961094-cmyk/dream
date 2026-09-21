@@ -3,28 +3,56 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>亢奋的梦境 v2 — Fractal Land 艺术改编(强化版)</title>
+<title>亢奋的梦境 v2 — 头部交互版</title>
 <!--
-  基于 Shadertoy XsBXWt("Fractal Cartoon" by Kali,MIT License;Nyan 部分来自 mu6k)的本地复刻。
-  【亢奋的梦境 v2 · 强化版】:清醒梦式的空间折叠重组、隧道卷入、频闪震颤、
-  电光蓝/荧光绿/洋红/金黄四色快切与局部色彩爆裂(软光斑)。
-  底层分形距离场(formula/de 的分形部分)、相机路径(path)、raymarch 循环保持原样;
-  折叠是在进入分形前的 domain warp,不属于推翻算法。
-  无参数面板:所有可调参数集中在下方 shader 顶部的参数区,直接改常量微调。
+  基于 Shadertoy XsBXWt("Fractal Cartoon" by Kali,MIT License;Nyan 部分来自 mu6k)的本地复刻改编。
+  【亢奋的梦境 v2 + 头部交互】:
+    · 原有:鼠标拖动视角 / 空格暂停 / H 隐藏面板 / 26 参数滑块 / 折叠·隧道·四色快切·爆裂·颗粒
+    · 新增:MediaPipe Face Detection 摄像头头部交互
+        - 头部向左转 → 上一个梦境场景;头部向右转 → 下一个梦境场景(5 组预设平滑过渡)
+        - 点头(头部向下) → 粒子爆发特效(叠加层,不影响 shader)
+        - 摇头(左右快速摆头) → 重置回初始梦境
+  说明:MediaPipe 库与模型从 jsdelivr CDN 加载(首次需联网);摄像头拒绝或加载失败时
+  自动降级为纯鼠标模式,原有交互全部不受影响。https(GitHub Pages)与本地打开均可使用。
 -->
 <style>
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
   #c { width: 100vw; height: 100vh; display: block; cursor: crosshair; }
+  /* 粒子特效层:覆盖在 WebGL 画布上,不拦截鼠标 */
+  #fx { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 3; }
   #hud {
     position: fixed; left: 10px; top: 10px; color: #fff; font: 12px/1.6 monospace;
-    text-shadow: 0 1px 2px #000; user-select: none; pointer-events: none; opacity: .7;
+    text-shadow: 0 1px 2px #000; user-select: none; pointer-events: none; opacity: .7; z-index: 4;
   }
+  /* 头部交互提示文字 */
+  #hint {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5;
+    color: #ffd9ff; font: 13px/1.4 monospace; white-space: nowrap;
+    background: rgba(12, 2, 26, .55); backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 120, 255, .3); border-radius: 20px; padding: 7px 18px;
+    text-shadow: 0 1px 2px #000; user-select: none; pointer-events: none;
+  }
+  /* 场景切换时的名字提示(淡出) */
+  #sceneTip {
+    position: fixed; top: 54px; left: 50%; transform: translateX(-50%); z-index: 5;
+    color: #fff; font: bold 18px/1.4 monospace; letter-spacing: 2px; white-space: nowrap;
+    text-shadow: 0 0 12px #ff6bf7, 0 1px 3px #000; user-select: none; pointer-events: none;
+    opacity: 0; transition: opacity .5s;
+  }
+  /* 摄像头预览小窗(右上角,镜像显示) */
+  #camWrap {
+    position: fixed; right: 12px; top: 12px; width: 176px; z-index: 6;
+    border: 1px solid rgba(255, 120, 255, .4); border-radius: 10px; overflow: hidden;
+    background: rgba(0, 0, 0, .55); box-shadow: 0 0 14px rgba(255, 107, 247, .25);
+  }
+  #cam { width: 100%; display: block; transform: scaleX(-1); }
+  #camStatus { display: block; font: 10px/1.5 monospace; color: #ffd9ff; padding: 4px 7px; }
   #panel {
     position: fixed; right: 12px; bottom: 12px; width: 252px; max-height: calc(100vh - 24px);
     overflow-y: auto; box-sizing: border-box; padding: 10px 14px 12px;
     background: rgba(12, 2, 26, .62); backdrop-filter: blur(8px);
     border: 1px solid rgba(255, 120, 255, .25); border-radius: 12px;
-    color: #f2e6ff; font: 11px/1.5 monospace; user-select: none;
+    color: #f2e6ff; font: 11px/1.5 monospace; user-select: none; z-index: 6;
   }
   #panel h1 { font: bold 12px/1.4 monospace; margin: 2px 0 6px; color: #ff9df5; letter-spacing: 1px; }
   #panel .grp { margin-top: 8px; color: #9f8fd0; }
@@ -33,12 +61,18 @@
   #panel .row input[type=range] { flex: 1; accent-color: #ff6bf7; height: 14px; padding: 0; margin: 0; }
   #panel .row .val { flex: 0 0 38px; text-align: right; color: #ffd9ff; }
   #err { position: fixed; inset: 0; display: none; overflow: auto; padding: 24px;
-         background: #111; color: #f66; font: 13px/1.5 monospace; white-space: pre-wrap; }
+         background: #111; color: #f66; font: 13px/1.5 monospace; white-space: pre-wrap; z-index: 9; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<canvas id="fx"></canvas>
 <div id="hud"></div>
+<!-- 头部交互提示文字 -->
+<div id="hint">左右转头切换场景,点头触发粒子,摇头重置画面</div>
+<div id="sceneTip"></div>
+<!-- 摄像头预览小窗 -->
+<div id="camWrap"><video id="cam" autoplay muted playsinline></video><span id="camStatus">摄像头:请求权限中…</span></div>
 <div id="panel"><h1>亢奋的梦境 v2 · 参数</h1><div id="rows"></div></div>
 <pre id="err"></pre>
 
@@ -46,8 +80,8 @@
 <script id="fs_image" type="x-shader/x-fragment">// "Fractal Cartoon" - former "DE edge detection" by Kali
 // "亢奋的梦境" 强化版:在保留原分形结构的前提下,叠加空间折叠/隧道卷入/频闪/四色快切/局部爆裂。
 
-// ════════════════ 【亢奋的梦境 v2 · 可调参数区】(右下角滑块实时控制) ════════════════
-// 每个参数 = uniform + 宏桥接:shader 主体写的是宏名,滑块/JS 默认值驱动 uniform。
+// ════════════════ 【亢奋的梦境 v2 · 可调参数区】(右下角滑块实时控制,场景切换亦驱动这些 uniform) ════════════════
+// 每个参数 = uniform + 宏桥接:shader 主体写的是宏名,滑块/场景/JS 默认值驱动 uniform。
 uniform float uSpeed;       // 全局速度倍率(1 = 原版)
 #define SPEED        uSpeed
 uniform float uWaveAmp;     // 流体波浪倍率(柔软有机感)
@@ -358,7 +392,7 @@ vec3 raymarch(in vec3 from, in vec3 dir)
 	dir.y-=.02;
 	float sunsize=7.-max(0.,texture(iChannel0,vec2(.6,.2)).x)*5.; // responsive sun size
 	col=mix(vec3(1.,.9,.3),col,exp(-.004*totdist*totdist));// distant fading to sun color
-	if (totdist>25.) col=dreamSky(dir,sunsize); // hit background 【改】背景解析式提成函数,支持色散
+	if (totdist>25.) col=dreamSky(dir,sunsize); // hit background 【改】背景解析式提成函数
 	col=pow(col,vec3(GAMMA))*BRIGHTNESS;
 	col=mix(vec3(length(col)),col,SATURATION);
 #ifdef SHOWONLYEDGES
@@ -444,7 +478,29 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
   const errBox = document.getElementById("err");
   const fragSrc = document.getElementById("fs_image").textContent;
 
-  // ==================== 参数默认值(改这里 = 改出厂设置) ====================
+  // ==================== 梦境场景预设(头部左右转头切换) ====================
+  // 每个场景 = 一组完整的 26 参数;切换时参数平滑过渡,视觉不跳变。
+  function base() {
+    return { uSpeed:2.1, uRollSpeed:0.33, uSwirl:0.5, uZoomBreath:0.05, uZoomSpeed:0.85,
+             uPushAmt:0.13, uPushSpeed:1.2, uFoldAmt:0.10, uFoldHz:0.22,
+             uBurstAmt:0.5, uBurstHz:2.5, uFlashAmt:0.11, uFlashHz:3.4,
+             uJitterAmt:0.006, uJitterHz:16, uTremor:0.0016,
+             uHueSpeed:0.22, uTintAmt:0.22, uTintHz:1.8, uWaveAmp:2.4,
+             uBlurAmt:0.55, uPulseAmt:0.16, uPulseSpeed:5,
+             uSatGain:2.1, uContrast:1.35, uGrain:0.10 };
+  }
+  const SCENES = [
+    { name: "初始梦境",  p: base() },                                                     // 场景 0 = 摇头重置目标
+    { name: "电光迷城",  p: { ...base(), uSwirl:0.9,  uBlurAmt:0.7,  uHueSpeed:0.5,  uTintAmt:0.4,  uFoldAmt:0.14, uSpeed:1.6 } },
+    { name: "荧光丛林",  p: { ...base(), uWaveAmp:3.6, uFoldAmt:0.16, uFoldHz:0.3,  uHueSpeed:0.9,  uPulseAmt:0.28, uJitterAmt:0.004, uSpeed:2.4 } },
+    { name: "洋红漩涡",  p: { ...base(), uSwirl:1.25, uRollSpeed:0.6, uTintAmt:0.35, uTintHz:2.6,  uSpeed:2.8,  uBlurAmt:0.45, uZoomBreath:0.09 } },
+    { name: "金色黄昏",  p: { ...base(), uHueSpeed:0.03, uTintAmt:0.15, uSatGain:2.5, uPulseSpeed:2.5, uPulseAmt:0.22, uJitterAmt:0.0025, uSpeed:1.4, uGrain:0.16 } },
+  ];
+  let sceneIdx = 0;                                   // 当前场景索引
+  const state  = { ...SCENES[0].p };                  // 实际 uniform 值(每帧向 target 平滑靠拢)
+  const target = { ...SCENES[0].p };                  // 目标值(滑块/场景切换写这里)
+
+  // ==================== 滑块参数表(与场景系统共用 state/target) ====================
   const PARAMS = [
     // —— 节奏与镜头 ——
     { key: "uSpeed",       label: "全局速度倍率", min: 0.5,  max: 4,    step: 0.05,   value: 2.1 },
@@ -482,7 +538,63 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     uSpeed: "节奏与镜头", uFoldAmt: "折叠与爆裂",
     uJitterAmt: "抖动", uHueSpeed: "色彩", uBlurAmt: "梦境质感",
   };
-  const state = Object.fromEntries(PARAMS.map(p => [p.key, p.value]));
+  const sliderEls = {};   // key -> {inp, val},场景切换时同步滑块显示
+
+  // ==================== 场景切换 ====================
+  const sceneTip = document.getElementById("sceneTip");
+  let sceneTipTimer = null;
+  function switchScene(idx) {
+    sceneIdx = (idx + SCENES.length) % SCENES.length;
+    Object.assign(target, SCENES[sceneIdx].p);        // 目标值切换,渲染循环里平滑过渡
+    for (const p of PARAMS) {                          // 同步滑块显示
+      const el = sliderEls[p.key];
+      if (el) { el.inp.value = target[p.key]; el.val.textContent = (+target[p.key]).toFixed(p.step < 0.01 ? 4 : 2); }
+    }
+    sceneTip.textContent = "◈ " + SCENES[sceneIdx].name;
+    sceneTip.style.opacity = 1;
+    clearTimeout(sceneTipTimer);
+    sceneTipTimer = setTimeout(() => { sceneTip.style.opacity = 0; }, 1800);
+  }
+
+  // ==================== 粒子爆发(点头触发;叠加层,不影响 shader) ====================
+  const fx = document.getElementById("fx");
+  const fctx = fx.getContext("2d");
+  const FX_COLORS = ["#26f7ff", "#5dff8f", "#ff2fb4", "#ffd318"];  // 电光蓝/荧光绿/洋红/金黄
+  let particles = [];
+  function resizeFx() {
+    fx.width = window.innerWidth; fx.height = window.innerHeight;
+  }
+  window.addEventListener("resize", resizeFx);
+  resizeFx();
+  function burst(cx, cy, n) {                          // 在 (cx,cy) 爆发 n 个粒子
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 2 + Math.random() * 8;
+      particles.push({
+        x: cx, y: cy,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2,
+        life: 1, decay: 0.012 + Math.random() * 0.014,
+        size: 2 + Math.random() * 3.5,
+        color: FX_COLORS[(Math.random() * FX_COLORS.length) | 0],
+      });
+    }
+  }
+  function fxStep(dt) {                                // 每帧更新 & 绘制粒子层
+    fctx.clearRect(0, 0, fx.width, fx.height);
+    if (!particles.length) return;
+    const alive = [];
+    for (const p of particles) {
+      p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.vx *= 0.985; p.life -= p.decay * (dt * 60);
+      if (p.life > 0) {
+        fctx.globalAlpha = Math.max(0, p.life);
+        fctx.fillStyle = p.color;
+        fctx.beginPath(); fctx.arc(p.x, p.y, p.size * (0.5 + p.life * 0.5), 0, 6.283); fctx.fill();
+        alive.push(p);
+      }
+    }
+    fctx.globalAlpha = 1;
+    particles = alive;
+  }
 
   const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: false })
           || canvas.getContext("webgl",  { antialias: false, preserveDrawingBuffer: false });
@@ -608,14 +720,16 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     inp.type = "range"; inp.min = p.min; inp.max = p.max; inp.step = p.step; inp.value = p.value;
     const val = document.createElement("span"); val.className = "val"; val.textContent = p.value;
     inp.addEventListener("input", () => {
-      state[p.key] = parseFloat(inp.value);
+      state[p.key] = parseFloat(inp.value);      // 滑块直接写 state 和 target(不被场景过渡拉回)
+      target[p.key] = parseFloat(inp.value);
       val.textContent = inp.value;
     });
     row.append(lab, inp, val);
     rows.appendChild(row);
+    sliderEls[p.key] = { inp, val };
   }
 
-  // ---- 交互 ----
+  // ---- 交互:鼠标 / 触摸拖动视角(原有交互,保留) ----
   const mouse = { x: 0, y: 0, z: 0, w: 0 };
   let dragging = false;
   canvas.addEventListener("mousedown", e => {
@@ -665,17 +779,123 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     errBox.textContent = msg;
   }
 
+  // ════════════════ 头部交互(MediaPipe Face Detection) ════════════════
+  // 原理:MediaPipe 检测人脸 6 关键点(眼/鼻/嘴/耳);
+  //   yaw   = (鼻尖x - 两眼中点x) / 两眼间距   → 左右转头
+  //   pitch = (鼻尖y - 两眼中点y) / 两眼间距   → 点头(相对个人基线的偏移)
+  //   摇头  = 短窗口内左右转头方向交替 ≥3 次
+  // 所有触发均带冷却时间,防止连续误触发。
+  const camVideo = document.getElementById("cam");
+  const camStatus = document.getElementById("camStatus");
+  const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/face-detection@0.4.1646425229";
+  let headCooldownUntil = 0;      // 转头/点头统一冷却
+  let shakeCooldownUntil = 0;     // 摇头冷却
+  let lastShakeDir = 0, shakeDirTime = 0, shakeCount = 0;
+  let pitchBaseline = null;       // 个人基线:鼻-眼纵向比例的慢速跟随值(适应不同脸型坐姿)
+  let faceTrackingOn = false;
+
+  function loadScript(src) {      // 动态注入 MediaPipe 脚本(带 15s 超时降级)
+    return new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = src; s.crossOrigin = "anonymous";
+      s.onload = res;
+      s.onerror = () => rej(new Error("脚本加载失败"));
+      document.head.appendChild(s);
+      setTimeout(() => rej(new Error("脚本加载超时")), 15000);
+    });
+  }
+
+  function onFaceResults(results) {
+    if (!faceTrackingOn) return;
+    const det = results.detections && results.detections[0];
+    if (!det || !det.keypoints || det.keypoints.length < 3) return;
+    const kp = det.keypoints;                          // [右眼, 左眼, 鼻尖, 嘴, 右耳, 左耳]
+    const ex = (kp[0].x + kp[1].x) / 2, ey = (kp[0].y + kp[1].y) / 2;
+    const eyeDist = Math.hypot(kp[0].x - kp[1].x, kp[0].y - kp[1].y) || 1e-6;
+    const yaw   = (kp[2].x - ex) / eyeDist;            // 左右转头比例
+    const pitch = (kp[2].y - ey) / eyeDist;            // 纵向比例(点头时增大)
+    const now = performance.now() / 1000;
+
+    // --- 个人基线:慢速跟随,适应不同脸型与坐姿 ---
+    if (pitchBaseline === null) pitchBaseline = pitch;
+    pitchBaseline += (pitch - pitchBaseline) * 0.02;
+    const pitchDelta = pitch - pitchBaseline;
+
+    // --- 摇头检测:0.8s 内左右方向交替 ≥3 次 ---
+    const sgn = yaw > 0.16 ? 1 : (yaw < -0.16 ? -1 : 0);
+    if (sgn !== 0 && sgn !== lastShakeDir) {
+      if (now - shakeDirTime < 0.8 && sgn === -lastShakeDir) shakeCount++;
+      else if (lastShakeDir === 0 || now - shakeDirTime >= 0.8) shakeCount = 1;
+      lastShakeDir = sgn; shakeDirTime = now;
+    }
+    if (shakeCount >= 3) {                             // 摇头 → 重置回初始梦境
+      shakeCount = 0; shakeCooldownUntil = now + 2.0; headCooldownUntil = now + 1.5;
+      switchScene(0);
+      burst(window.innerWidth / 2, window.innerHeight * 0.45, 90);
+      return;
+    }
+    if (now < Math.max(headCooldownUntil, shakeCooldownUntil)) return;
+
+    // --- 点头:鼻尖相对基线明显下移 → 粒子爆发 ---
+    if (pitchDelta > 0.15) {
+      headCooldownUntil = now + 1.2; pitchBaseline = pitch + 0.05;   // 抬头回基线后才可再次触发
+      burst(window.innerWidth / 2, window.innerHeight * 0.45, 200);
+      return;
+    }
+
+    // --- 左右转头:切场景(冷却 1.4s) ---
+    if (yaw > 0.34)       { headCooldownUntil = now + 1.4; switchScene(sceneIdx - 1); }  // 向左转 → 上一个
+    else if (yaw < -0.34) { headCooldownUntil = now + 1.4; switchScene(sceneIdx + 1); }  // 向右转 → 下一个
+  }
+
+  async function setupHeadTracking() {
+    try {
+      // 1) 请求摄像头(页面加载即弹权限)
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: "user" }, audio: false
+      });
+      camVideo.srcObject = stream;
+      await camVideo.play();
+      camStatus.textContent = "摄像头:已连接,加载人脸模型…";
+      // 2) 加载 MediaPipe Face Detection(CDN,首次需联网)
+      await loadScript(MP + "/face_detection.js");
+      const faceDetection = new FaceDetection({ locateFile: f => `${MP}/${f}` });
+      faceDetection.setOptions({ model: "short" });    // 近距离自拍模型
+      faceDetection.onResults(onFaceResults);
+      faceTrackingOn = true;
+      camStatus.textContent = "头部交互已就绪 ✔ 转头/点头/摇头试试";
+      // 3) 检测循环(异步防重入,~15fps 足够)
+      (async () => {
+        while (faceTrackingOn) {
+          try { if (camVideo.readyState >= 2) await faceDetection.send({ image: camVideo }); }
+          catch (e) { /* 单帧失败忽略 */ }
+          await new Promise(r => setTimeout(r, 66));
+        }
+      })();
+    } catch (e) {
+      const msg = String((e && e.name) || e);
+      camStatus.textContent = (msg.includes("NotAllowed") || msg.includes("Permission")
+        ? "摄像头:权限被拒绝" : "摄像头:不可用") + "(头动交互停用,鼠标交互正常)";
+    }
+  }
+  setupHeadTracking();   // 页面加载即弹摄像头权限
+
   // ---- 主循环 ----
   const t0 = performance.now();
-  let lastT = 0, frame = 0, lastFrameTime = t0;
+  let lastT = 0, frame = 0, lastFrameTime = t0, lastNow = t0;
 
   function render(now) {
     resize();
+    const dt = Math.min((now - lastNow) / 1000, 0.1);
+    lastNow = now;
     const time = paused ? lastT : (now - t0) / 1000;
-    const dt = paused ? 0 : Math.min((now - lastFrameTime) / 1000, 0.1);
     lastT = time;
     lastFrameTime = now;
     frame++;
+
+    // 场景/滑块参数平滑过渡:state → target
+    const k = 1 - Math.exp(-dt * 3);
+    for (const p of PARAMS) state[p.key] += (target[p.key] - state[p.key]) * k;
 
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.uniform3f(U.iResolution, canvas.width, canvas.height, 1);
@@ -697,9 +917,10 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     }
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    fxStep(dt);   // 粒子层更新
 
     if (frame % 15 === 0) {
-      hud.textContent = `亢奋的梦境 v2 强化版 — Fractal Land 改编  |  ${canvas.width}x${canvas.height}  |  空格暂停 · H 隐藏面板${paused ? " [已暂停]" : ""}`;
+      hud.textContent = `亢奋的梦境 v2 · ${SCENES[sceneIdx].name}  |  ${canvas.width}x${canvas.height}  |  空格暂停 · H 面板${paused ? " [已暂停]" : ""}`;
     }
     requestAnimationFrame(render);
   }

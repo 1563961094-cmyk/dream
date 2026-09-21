@@ -1,15 +1,38 @@
 "use strict";
 /**
- * 亢奋的梦境 v2 · 运行器(多文件版)
+ * 亢奋的梦境 v2 · 运行器(多文件版,含头部交互)
  * 基于 Shadertoy XsBXWt("Fractal Cartoon" by Kali,MIT License)的本地复刻改编。
- * 从 shaders/dream.frag 加载片元 shader(需要通过 http 服务访问本目录)。
+ * 从 dream.frag 加载片元 shader(需要通过 http 服务 / GitHub Pages 访问本目录)。
+ * 功能与单文件版 index-dream-v2.html 完全一致:
+ *   26 参数滑块 + 梦境场景系统 + MediaPipe 头部交互(转头切场景/点头粒子/摇头重置)。
  */
 (() => {
   const canvas = document.getElementById("c");
   const hud = document.getElementById("hud");
   const errBox = document.getElementById("err");
 
-  // ==================== 参数默认值(改这里 = 改出厂设置) ====================
+  // ==================== 梦境场景预设(头部左右转头切换) ====================
+  function base() {
+    return { uSpeed:2.1, uRollSpeed:0.33, uSwirl:0.5, uZoomBreath:0.05, uZoomSpeed:0.85,
+             uPushAmt:0.13, uPushSpeed:1.2, uFoldAmt:0.10, uFoldHz:0.22,
+             uBurstAmt:0.5, uBurstHz:2.5, uFlashAmt:0.11, uFlashHz:3.4,
+             uJitterAmt:0.006, uJitterHz:16, uTremor:0.0016,
+             uHueSpeed:0.22, uTintAmt:0.22, uTintHz:1.8, uWaveAmp:2.4,
+             uBlurAmt:0.55, uPulseAmt:0.16, uPulseSpeed:5,
+             uSatGain:2.1, uContrast:1.35, uGrain:0.10 };
+  }
+  const SCENES = [
+    { name: "初始梦境",  p: base() },
+    { name: "电光迷城",  p: { ...base(), uSwirl:0.9,  uBlurAmt:0.7,  uHueSpeed:0.5,  uTintAmt:0.4,  uFoldAmt:0.14, uSpeed:1.6 } },
+    { name: "荧光丛林",  p: { ...base(), uWaveAmp:3.6, uFoldAmt:0.16, uFoldHz:0.3,  uHueSpeed:0.9,  uPulseAmt:0.28, uJitterAmt:0.004, uSpeed:2.4 } },
+    { name: "洋红漩涡",  p: { ...base(), uSwirl:1.25, uRollSpeed:0.6, uTintAmt:0.35, uTintHz:2.6,  uSpeed:2.8,  uBlurAmt:0.45, uZoomBreath:0.09 } },
+    { name: "金色黄昏",  p: { ...base(), uHueSpeed:0.03, uTintAmt:0.15, uSatGain:2.5, uPulseSpeed:2.5, uPulseAmt:0.22, uJitterAmt:0.0025, uSpeed:1.4, uGrain:0.16 } },
+  ];
+  let sceneIdx = 0;
+  const state  = { ...SCENES[0].p };                  // 实际 uniform 值(每帧向 target 平滑靠拢)
+  const target = { ...SCENES[0].p };                  // 目标值(滑块/场景切换写这里)
+
+  // ==================== 滑块参数表 ====================
   const PARAMS = [
     // —— 节奏与镜头 ——
     { key: "uSpeed",       label: "全局速度倍率", min: 0.5,  max: 4,    step: 0.05,   value: 2.1 },
@@ -47,15 +70,16 @@
     uSpeed: "节奏与镜头", uFoldAmt: "折叠与爆裂",
     uJitterAmt: "抖动", uHueSpeed: "色彩", uBlurAmt: "梦境质感",
   };
-  const state = Object.fromEntries(PARAMS.map(p => [p.key, p.value]));
+  const sliderEls = {};
 
   function showErr(msg) {
     errBox.style.display = "block";
     errBox.textContent = msg;
   }
 
+  // shader 从仓库根目录的 dream.frag 加载(必须走 http / GitHub Pages)
   fetch("dream.frag")
-    .then(r => { if (!r.ok) throw new Error("dream.frag 加载失败: HTTP " + r.status + "\n请通过 http 服务访问本目录(如 python3 -m http.server),不要直接双击打开。"); return r.text(); })
+    .then(r => { if (!r.ok) throw new Error("dream.frag 加载失败: HTTP " + r.status + "\n请通过 http 服务或 GitHub Pages 访问,不要直接双击 index.html(可改用单文件版 index-dream-v2.html)。"); return r.text(); })
     .then(src => init(src))
     .catch(e => showErr(String(e.message || e)));
 
@@ -191,13 +215,15 @@
       const val = document.createElement("span"); val.className = "val"; val.textContent = p.value;
       inp.addEventListener("input", () => {
         state[p.key] = parseFloat(inp.value);
+        target[p.key] = parseFloat(inp.value);
         val.textContent = inp.value;
       });
       row.append(lab, inp, val);
       rows.appendChild(row);
+      sliderEls[p.key] = { inp, val };
     }
 
-    // ---- 交互 ----
+    // ---- 交互:鼠标 / 触摸拖动视角(原有交互,保留) ----
     const mouse = { x: 0, y: 0, z: 0, w: 0 };
     let dragging = false;
     canvas.addEventListener("mousedown", e => {
@@ -242,17 +268,110 @@
     }
     window.addEventListener("resize", resize);
 
+    // ════════════════ 头部交互(MediaPipe Face Detection) ════════════════
+    const camVideo = document.getElementById("cam");
+    const camStatus = document.getElementById("camStatus");
+    const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/face-detection@0.4.1646425229";
+    let headCooldownUntil = 0, shakeCooldownUntil = 0;
+    let lastShakeDir = 0, shakeDirTime = 0, shakeCount = 0;
+    let pitchBaseline = null, faceTrackingOn = false;
+
+    function loadScript(src) {
+      return new Promise((res, rej) => {
+        const s = document.createElement("script");
+        s.src = src; s.crossOrigin = "anonymous";
+        s.onload = res;
+        s.onerror = () => rej(new Error("脚本加载失败"));
+        document.head.appendChild(s);
+        setTimeout(() => rej(new Error("脚本加载超时")), 15000);
+      });
+    }
+
+    function onFaceResults(results) {
+      if (!faceTrackingOn) return;
+      const det = results.detections && results.detections[0];
+      if (!det || !det.keypoints || det.keypoints.length < 3) return;
+      const kp = det.keypoints;                        // [右眼, 左眼, 鼻尖, 嘴, 右耳, 左耳]
+      const ex = (kp[0].x + kp[1].x) / 2, ey = (kp[0].y + kp[1].y) / 2;
+      const eyeDist = Math.hypot(kp[0].x - kp[1].x, kp[0].y - kp[1].y) || 1e-6;
+      const yaw   = (kp[2].x - ex) / eyeDist;          // 左右转头比例
+      const pitch = (kp[2].y - ey) / eyeDist;          // 纵向比例(点头时增大)
+      const now = performance.now() / 1000;
+
+      if (pitchBaseline === null) pitchBaseline = pitch;
+      pitchBaseline += (pitch - pitchBaseline) * 0.02;
+      const pitchDelta = pitch - pitchBaseline;
+
+      // 摇头检测:0.8s 内左右方向交替 ≥3 次
+      const sgn = yaw > 0.16 ? 1 : (yaw < -0.16 ? -1 : 0);
+      if (sgn !== 0 && sgn !== lastShakeDir) {
+        if (now - shakeDirTime < 0.8 && sgn === -lastShakeDir) shakeCount++;
+        else if (lastShakeDir === 0 || now - shakeDirTime >= 0.8) shakeCount = 1;
+        lastShakeDir = sgn; shakeDirTime = now;
+      }
+      if (shakeCount >= 3) {
+        shakeCount = 0; shakeCooldownUntil = now + 2.0; headCooldownUntil = now + 1.5;
+        switchScene(0);
+        burst(window.innerWidth / 2, window.innerHeight * 0.45, 90);
+        return;
+      }
+      if (now < Math.max(headCooldownUntil, shakeCooldownUntil)) return;
+
+      // 点头 → 粒子爆发
+      if (pitchDelta > 0.15) {
+        headCooldownUntil = now + 1.2; pitchBaseline = pitch + 0.05;
+        burst(window.innerWidth / 2, window.innerHeight * 0.45, 200);
+        return;
+      }
+      // 左右转头 → 切场景
+      if (yaw > 0.34)       { headCooldownUntil = now + 1.4; switchScene(sceneIdx - 1); }
+      else if (yaw < -0.34) { headCooldownUntil = now + 1.4; switchScene(sceneIdx + 1); }
+    }
+
+    async function setupHeadTracking() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: "user" }, audio: false
+        });
+        camVideo.srcObject = stream;
+        await camVideo.play();
+        camStatus.textContent = "摄像头:已连接,加载人脸模型…";
+        await loadScript(MP + "/face_detection.js");
+        const faceDetection = new FaceDetection({ locateFile: f => `${MP}/${f}` });
+        faceDetection.setOptions({ model: "short" });
+        faceDetection.onResults(onFaceResults);
+        faceTrackingOn = true;
+        camStatus.textContent = "头部交互已就绪 ✔ 转头/点头/摇头试试";
+        (async () => {
+          while (faceTrackingOn) {
+            try { if (camVideo.readyState >= 2) await faceDetection.send({ image: camVideo }); }
+            catch (e) { /* 单帧失败忽略 */ }
+            await new Promise(r => setTimeout(r, 66));
+          }
+        })();
+      } catch (e) {
+        const msg = String((e && e.name) || e);
+        camStatus.textContent = (msg.includes("NotAllowed") || msg.includes("Permission")
+          ? "摄像头:权限被拒绝" : "摄像头:不可用") + "(头动交互停用,鼠标交互正常)";
+      }
+    }
+    setupHeadTracking();
+
     // ---- 主循环 ----
     const t0 = performance.now();
-    let lastT = 0, frame = 0, lastFrameTime = t0;
+    let lastT = 0, frame = 0, lastFrameTime = t0, lastNow = t0;
 
     function render(now) {
       resize();
+      const dt = Math.min((now - lastNow) / 1000, 0.1);
+      lastNow = now;
       const time = paused ? lastT : (now - t0) / 1000;
-      const dt = paused ? 0 : Math.min((now - lastFrameTime) / 1000, 0.1);
       lastT = time;
       lastFrameTime = now;
       frame++;
+
+      const k = 1 - Math.exp(-dt * 3);
+      for (const p of PARAMS) state[p.key] += (target[p.key] - state[p.key]) * k;
 
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.uniform3f(U.iResolution, canvas.width, canvas.height, 1);
@@ -274,12 +393,69 @@
       }
 
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+      fxStep(dt);
 
       if (frame % 15 === 0) {
-        hud.textContent = `亢奋的梦境 v2 强化版 — Fractal Land 改编  |  ${canvas.width}x${canvas.height}  |  空格暂停 · H 隐藏面板${paused ? " [已暂停]" : ""}`;
+        hud.textContent = `亢奋的梦境 v2 · ${SCENES[sceneIdx].name}  |  ${canvas.width}x${canvas.height}  |  空格暂停 · H 面板${paused ? " [已暂停]" : ""}`;
       }
       requestAnimationFrame(render);
     }
     requestAnimationFrame(render);
+  }
+
+  // ==================== 场景切换 / 粒子层(init 之外也可用的顶层函数) ====================
+  const sceneTip = document.getElementById("sceneTip");
+  let sceneTipTimer = null;
+  function switchScene(idx) {
+    sceneIdx = (idx + SCENES.length) % SCENES.length;
+    Object.assign(target, SCENES[sceneIdx].p);
+    for (const p of PARAMS) {
+      const el = sliderEls[p.key];
+      if (el) { el.inp.value = target[p.key]; el.val.textContent = (+target[p.key]).toFixed(p.step < 0.01 ? 4 : 2); }
+    }
+    sceneTip.textContent = "◈ " + SCENES[sceneIdx].name;
+    sceneTip.style.opacity = 1;
+    clearTimeout(sceneTipTimer);
+    sceneTipTimer = setTimeout(() => { sceneTip.style.opacity = 0; }, 1800);
+  }
+
+  // 粒子特效层
+  const fx = document.getElementById("fx");
+  const fctx = fx.getContext("2d");
+  const FX_COLORS = ["#26f7ff", "#5dff8f", "#ff2fb4", "#ffd318"];
+  let particles = [];
+  function resizeFx() {
+    fx.width = window.innerWidth; fx.height = window.innerHeight;
+  }
+  window.addEventListener("resize", resizeFx);
+  resizeFx();
+  function burst(cx, cy, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 2 + Math.random() * 8;
+      particles.push({
+        x: cx, y: cy,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2,
+        life: 1, decay: 0.012 + Math.random() * 0.014,
+        size: 2 + Math.random() * 3.5,
+        color: FX_COLORS[(Math.random() * FX_COLORS.length) | 0],
+      });
+    }
+  }
+  function fxStep(dt) {
+    fctx.clearRect(0, 0, fx.width, fx.height);
+    if (!particles.length) return;
+    const alive = [];
+    for (const p of particles) {
+      p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.vx *= 0.985; p.life -= p.decay * (dt * 60);
+      if (p.life > 0) {
+        fctx.globalAlpha = Math.max(0, p.life);
+        fctx.fillStyle = p.color;
+        fctx.beginPath(); fctx.arc(p.x, p.y, p.size * (0.5 + p.life * 0.5), 0, 6.283); fctx.fill();
+        alive.push(p);
+      }
+    }
+    fctx.globalAlpha = 1;
+    particles = alive;
   }
 })();

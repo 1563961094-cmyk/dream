@@ -23,8 +23,8 @@ python3 -m http.server 8000
 # 浏览器打开 http://localhost:8000/index.html
 ```
 
-多文件版由 `index.html` + `main.js`(运行器)+ `shaders/dream.frag`(改编 shader,运行时加载)组成;
-`shaders/original_pass0.glsl` / `original_pass1.glsl` 是从 Shadertoy 提取的原版 pass 源码存档。
+多文件版由 `index.html` + `main.js`(运行器)+ `dream.frag`(改编 shader,运行时加载)组成;
+`original_pass0.glsl` / `original_pass1.glsl`(及 `image.frag` / `sound.frag`)是从 Shadertoy 提取的原版 pass 源码存档。
 
 > 注意:多文件版通过 fetch 加载 shader,必须走 http 服务,直接双击 `index.html` 会因浏览器安全策略加载失败(此时请用方式一)。
 
