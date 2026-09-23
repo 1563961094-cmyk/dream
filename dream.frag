@@ -1,8 +1,8 @@
 // "Fractal Cartoon" - former "DE edge detection" by Kali
 // "亢奋的梦境" 强化版:在保留原分形结构的前提下,叠加空间折叠/隧道卷入/频闪/四色快切/局部爆裂。
 
-// ════════════════ 【亢奋的梦境 v2 · 可调参数区】(右下角滑块实时控制) ════════════════
-// 每个参数 = uniform + 宏桥接:shader 主体写的是宏名,滑块/JS 默认值驱动 uniform。
+// ════════════════ 【亢奋的梦境 v2 · 可调参数区】(右下角「梦境调节旋钮」实时控制,场景切换亦驱动这些 uniform) ════════════════
+// 每个参数 = uniform + 宏桥接:shader 主体写的是宏名,滑块/场景/JS 默认值驱动 uniform。
 uniform float uSpeed;       // 全局速度倍率(1 = 原版)
 #define SPEED        uSpeed
 uniform float uWaveAmp;     // 流体波浪倍率(柔软有机感)
@@ -226,8 +226,9 @@ vec3 dreamSky(vec3 dir, float sunsize){
 	return vec3(br.r,b0.g,bb.b);
 }
 
-// 【增】亢奋的梦境后处理 v2:
-// 虚实雾化 → 脉动 → 霓虹 → 色相流转 → 四色快切 → 局部爆裂 → 频闪 → 饱和 → 对比 → 颗粒
+// 【增】亢奋的梦境后处理 v2.1:
+// 虚实雾化 → 脉动 → 霓虹 → 色相流转 → 四色快切 → 局部爆裂 → 频闪 → 饱和 → 对比
+// → 呼吸暗角 → 记忆碎片 → 幻觉色差 → 颗粒   (后三项为叙事版新增,复用 iTime,零新增 uniform)
 vec3 dreamPost(vec3 c, vec2 fc){
 	float breathe=.5+.5*sin(iTime*PULSE_SPEED);
 
@@ -276,6 +277,34 @@ vec3 dreamPost(vec3 c, vec2 fc){
 	// 对比度
 	c=(c-.5)*CONTRAST+.5;
 
+	// 【增 v2.1】呼吸暗角:模拟睡眠时眼皮的明暗节律,画面边缘随呼吸周期收拢舒展
+	{
+		float rN=length(fc/iResolution.xy*2.-1.);
+		float eyelid=0.16+0.10*(0.5+0.5*sin(iTime*0.45));      // 慢呼吸节律
+		c*=1.0-eyelid*smoothstep(0.45,1.4,rN);
+	}
+
+	// 【增 v2.1】记忆碎片:细碎的随机闪光,像梦里一闪而过的回忆
+	{
+		vec2 fpx=fc/iResolution.xy;
+		vec2 fcid=floor(fpx*vec2(26.,15.));
+		float fn=hash21(fcid+floor(iTime*1.7)*7.7);
+		if (fn>0.955) {                                        // 只有极少数格子会闪
+			float fph=fract(iTime*1.7+fn*13.1);
+			vec2 fuv=fract(fpx*vec2(26.,15.))-0.5
+			        -(vec2(hash21(fcid+3.3),hash21(fcid+5.1))-0.5)*0.5;
+			float fpt=smoothstep(0.10,0.0,length(fuv));        // 软边小光点
+			c+=dreamTint(floor(fn*40.0))*fpt*exp(-fph*6.0)*0.9;
+		}
+	}
+
+	// 【增 v2.1】轻微幻觉色差:做梦时对焦不准的微弱 RGB 重影
+	// (廉价近似:通道亮度微分离,越靠边缘越明显;强度压得很低,不刺眼)
+	{
+		float ab=(0.010+0.006*sin(iTime*0.9))*(0.6+0.8*length(fc/iResolution.xy-0.5));
+		c=vec3(c.r*(1.0+ab), c.g*(1.0+ab*0.25), c.b*(1.0-ab));
+	}
+
 	// 噪点颗粒(按 JITTER_HZ 节奏刷新)
 	float jt=floor(iTime*JITTER_HZ);
 	c+=(hash21(fc+vec2(jt*17.13,jt*29.7))-.5)*GRAIN_AMT;
@@ -313,7 +342,7 @@ vec3 raymarch(in vec3 from, in vec3 dir)
 	dir.y-=.02;
 	float sunsize=7.-max(0.,texture(iChannel0,vec2(.6,.2)).x)*5.; // responsive sun size
 	col=mix(vec3(1.,.9,.3),col,exp(-.004*totdist*totdist));// distant fading to sun color
-	if (totdist>25.) col=dreamSky(dir,sunsize); // hit background 【改】背景解析式提成函数,支持色散
+	if (totdist>25.) col=dreamSky(dir,sunsize); // hit background 【改】背景解析式提成函数
 	col=pow(col,vec3(GAMMA))*BRIGHTNESS;
 	col=mix(vec3(length(col)),col,SATURATION);
 #ifdef SHOWONLYEDGES
@@ -382,7 +411,7 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
 	vec3 from=origin+move(dir);
 	vec3 color=raymarch(from,dir); 
 
-	// 【增】亢奋的梦境后处理 v2
+	// 【增】亢奋的梦境后处理 v2.1
 	color=dreamPost(color, fragCoord);
 
 	#ifdef BORDER

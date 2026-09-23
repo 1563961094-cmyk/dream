@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>亢奋的梦境 v2 — 头部交互版(多文件版)</title>
+<title>亢奋的梦境 v2 — 一场可以游历的梦(多文件版)</title>
 <!--
-  亢奋的梦境 v2 · 多文件版入口。
+  亢奋的梦境 v2.1 · 叙事版多文件入口。
   基于 Shadertoy XsBXWt("Fractal Cartoon" by Kali,MIT License;Nyan 部分来自 mu6k)。
   运行器在 main.js,shader 在 dream.frag(运行时 fetch 加载,需要 http 服务 / GitHub Pages);
-  功能与单文件版 index-dream-v2.html 一致:26 参数滑块 + 梦境场景 + MediaPipe 头部交互。
+  功能与单文件版 index-dream-v2.html 一致:26 参数旋钮 + 梦境叙事线 + MediaPipe 头部交互。
   想要"双击即用"的版本,请打开同目录的 index-dream-v2.html(单文件自包含版)。
 -->
 <style>
@@ -18,22 +18,41 @@
   #fx { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 3; }
   #hud {
     position: fixed; left: 10px; top: 10px; color: #fff; font: 12px/1.6 monospace;
-    text-shadow: 0 1px 2px #000; user-select: none; pointer-events: none; opacity: .7; z-index: 4;
+    text-shadow: 0 1px 2px #000; user-select: none; pointer-events: none; opacity: .75; z-index: 4;
   }
-  /* 头部交互提示文字 */
+  /* 头部交互引导话术(叙事化) */
   #hint {
     position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5;
-    color: #ffd9ff; font: 13px/1.4 monospace; white-space: nowrap;
+    color: #ffe9ff; font: 13px/1.5 monospace; white-space: nowrap; text-align: center;
     background: rgba(12, 2, 26, .55); backdrop-filter: blur(6px);
     border: 1px solid rgba(255, 120, 255, .3); border-radius: 20px; padding: 7px 18px;
     text-shadow: 0 1px 2px #000; user-select: none; pointer-events: none;
   }
-  /* 场景切换时的名字提示(淡出) */
+  /* 梦境故事卡:标题 + 情绪标签 + 小故事,淡入淡出约 3 秒 */
   #sceneTip {
-    position: fixed; top: 54px; left: 50%; transform: translateX(-50%); z-index: 5;
-    color: #fff; font: bold 18px/1.4 monospace; letter-spacing: 2px; white-space: nowrap;
-    text-shadow: 0 0 12px #ff6bf7, 0 1px 3px #000; user-select: none; pointer-events: none;
-    opacity: 0; transition: opacity .5s;
+    position: fixed; top: 90px; left: 50%; transform: translateX(-50%); z-index: 5;
+    width: min(620px, 86vw); text-align: center; pointer-events: none; user-select: none;
+    opacity: 0; transition: opacity .7s ease;
+  }
+  #sceneTip .s-title {
+    font: bold 26px/1.3 "PingFang SC", monospace; letter-spacing: 6px; color: #fff;
+    text-shadow: 0 0 18px #ff6bf7, 0 2px 4px #000;
+  }
+  #sceneTip .s-tag {
+    display: inline-block; margin: 8px 0 10px; padding: 2px 14px;
+    font: 12px/1.6 monospace; color: #ffd9ff; letter-spacing: 3px;
+    border: 1px solid rgba(255, 120, 255, .45); border-radius: 14px;
+    background: rgba(12, 2, 26, .45);
+  }
+  #sceneTip .s-story {
+    font: 15px/1.9 "PingFang SC", serif; color: #f5eaff;
+    text-shadow: 0 1px 3px #000, 0 0 10px rgba(255, 107, 247, .35);
+  }
+  /* 光敏风险提示(常显) */
+  #disclaimer {
+    position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 5;
+    color: #ffe9a8; font: 11px/1.4 monospace; white-space: nowrap;
+    text-shadow: 0 1px 2px #000; opacity: .8; user-select: none; pointer-events: none;
   }
   /* 摄像头预览小窗(右上角,镜像显示) */
   #camWrap {
@@ -43,19 +62,24 @@
   }
   #cam { width: 100%; display: block; transform: scaleX(-1); }
   #camStatus { display: block; font: 10px/1.5 monospace; color: #ffd9ff; padding: 4px 7px; }
+  /* 右下角「梦境调节旋钮」面板 */
   #panel {
-    position: fixed; right: 12px; bottom: 12px; width: 252px; max-height: calc(100vh - 24px);
+    position: fixed; right: 12px; bottom: 30px; width: 252px; max-height: calc(100vh - 60px);
     overflow-y: auto; box-sizing: border-box; padding: 10px 14px 12px;
     background: rgba(12, 2, 26, .62); backdrop-filter: blur(8px);
     border: 1px solid rgba(255, 120, 255, .25); border-radius: 12px;
     color: #f2e6ff; font: 11px/1.5 monospace; user-select: none; z-index: 6;
   }
-  #panel h1 { font: bold 12px/1.4 monospace; margin: 2px 0 6px; color: #ff9df5; letter-spacing: 1px; }
+  #panel h1 { font: bold 12px/1.4 monospace; margin: 2px 0 6px; color: #ff9df5; letter-spacing: 2px; }
   #panel .grp { margin-top: 8px; color: #9f8fd0; }
   #panel .row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
   #panel .row label { flex: 0 0 104px; }
   #panel .row input[type=range] { flex: 1; accent-color: #ff6bf7; height: 14px; padding: 0; margin: 0; }
   #panel .row .val { flex: 0 0 38px; text-align: right; color: #ffd9ff; }
+  /* 面板收起:点标题栏折叠成把手,再点展开 */
+  #panel .head { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  #panel .fold { color: #ff9df5; font: bold 14px/1 monospace; padding: 2px 6px; }
+  #panel.collapsed #rows { display: none; }
   #err { position: fixed; inset: 0; display: none; overflow: auto; padding: 24px;
          background: #111; color: #f66; font: 13px/1.5 monospace; white-space: pre-wrap; z-index: 9; }
 </style>
@@ -64,12 +88,14 @@
 <canvas id="c"></canvas>
 <canvas id="fx"></canvas>
 <div id="hud"></div>
-<!-- 头部交互提示文字 -->
-<div id="hint">左右转头切换场景,点头触发粒子,摇头重置画面</div>
+<!-- 头部交互引导话术(叙事化) -->
+<div id="hint">闭上眼——向左转头,回望来时的梦;向右,坠入下一段;点头,炸开记忆碎片;摇头,猛然惊醒</div>
 <div id="sceneTip"></div>
 <!-- 摄像头预览小窗 -->
 <div id="camWrap"><video id="cam" autoplay muted playsinline></video><span id="camStatus">摄像头:请求权限中…</span></div>
-<div id="panel"><h1>亢奋的梦境 v2 · 参数</h1><div id="rows"></div></div>
+<div id="panel"><div class="head" id="panelHead"><h1>✦ 梦境调节旋钮 ✦</h1><span class="fold" id="panelFold">—</span></div><div id="rows"></div></div>
+<!-- 光敏风险提示 -->
+<div id="disclaimer">⚠ 本作品包含闪烁光影,光敏癫痫人群请谨慎体验</div>
 <pre id="err"></pre>
 <script src="main.js"></script>
 </body>
